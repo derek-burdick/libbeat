@@ -29,6 +29,10 @@
 		{
 			"ImportPath": "golang.org/x/sys/windows",
 			"Rev": "342d6a85aa15bcd2ec54803cdffe90d52b6f35a7"
+		},
+		{
+			"ImportPath": "github.com/derek-burdick/go-aws-auth",
+			"Rev": "483ac9d2c646cc5ba6c9ceeb5543d35b39c541d5"
 		}
 	]
 }
