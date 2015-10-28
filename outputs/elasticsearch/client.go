@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	awsauth "github.com/derek-burdick/go-aws-auth"
 	"github.com/elastic/libbeat/common"
 	"github.com/elastic/libbeat/logp"
 )
@@ -26,17 +27,19 @@ type Connection struct {
 
 	http      *http.Client
 	connected bool
+	AwsSign   bool
 }
 
 func NewClient(
 	url, index string, tls *tls.Config,
-	username, password string,
+	username, password string, awsSign bool,
 ) *Client {
 	client := &Client{
 		Connection{
 			URL:      url,
 			Username: username,
 			Password: password,
+			AwsSign:  awsSign,
 			http: &http.Client{
 				Transport: &http.Transport{TLSClientConfig: tls},
 			},
@@ -188,6 +191,10 @@ func (conn *Connection) execRequest(
 	req.Header.Add("Accept", "application/json")
 	if conn.Username != "" || conn.Password != "" {
 		req.SetBasicAuth(conn.Username, conn.Password)
+	}
+
+	if conn.AwsSign {
+		awsauth.Sign4(req)
 	}
 
 	resp, err := conn.http.Do(req)

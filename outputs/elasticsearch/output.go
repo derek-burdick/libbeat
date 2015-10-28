@@ -163,7 +163,7 @@ func makeClients(
 
 	var clients []mode.ProtocolClient
 	for _, url := range urls {
-		client := NewClient(url, index, tlsConfig, config.Username, config.Password)
+		client := NewClient(url, index, tlsConfig, config.Username, config.Password, config.AwsSign)
 		clients = append(clients, client)
 	}
 	return clients, nil

@@ -32,6 +32,7 @@ type MothershipConfig struct {
 	Max_retries        *int
 	Pretty             *bool
 	TLS                *TLSConfig
+	AwsSign            bool
 }
 
 type Outputer interface {
