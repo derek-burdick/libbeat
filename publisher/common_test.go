@@ -2,6 +2,7 @@ package publisher
 
 import (
 	"fmt"
+	"sync/atomic"
 	"time"
 
 	"github.com/elastic/libbeat/common"
@@ -13,7 +14,7 @@ import (
 type testMessageHandler struct {
 	msgs     chan message   // Channel that hold received messages.
 	response OutputResponse // Response type to give to received messages.
-	stopped  bool           // Indicates if the messageHandler has been stopped.
+	stopped  uint32         // Indicates if the messageHandler has been stopped.
 }
 
 var _ messageHandler = &testMessageHandler{}
@@ -25,7 +26,7 @@ func (mh *testMessageHandler) onMessage(m message) {
 }
 
 func (mh *testMessageHandler) onStop() {
-	mh.stopped = true
+	atomic.AddUint32(&mh.stopped, 1)
 }
 
 func (mh *testMessageHandler) send(m message) {
@@ -35,9 +36,9 @@ func (mh *testMessageHandler) send(m message) {
 
 func (mh *testMessageHandler) acknowledgeMessage(m message) {
 	if mh.response == CompletedResponse {
-		outputs.SignalCompleted(m.signal)
+		outputs.SignalCompleted(m.context.signal)
 	} else {
-		outputs.SignalFailed(m.signal)
+		outputs.SignalFailed(m.context.signal, nil)
 	}
 }
 
@@ -106,7 +107,7 @@ func (s *testSignaler) Failed() {
 // populated.
 func testEvent() common.MapStr {
 	event := common.MapStr{}
-	event["timestamp"] = common.Time(time.Now())
+	event["@timestamp"] = common.Time(time.Now())
 	event["type"] = "test"
 	event["src"] = &common.Endpoint{}
 	event["dst"] = &common.Endpoint{}
@@ -137,7 +138,7 @@ func newTestPublisher(bulkSize int, response OutputResponse) *testPublisher {
 	}
 
 	ow := &outputWorker{}
-	ow.config.Bulk_size = &bulkSize
+	ow.config.BulkMaxSize = &bulkSize
 	ow.handler = mh
 	ws := workerSignal{}
 	ow.messageWorker.init(&ws, 1000, mh)
@@ -156,6 +157,26 @@ func newTestPublisher(bulkSize int, response OutputResponse) *testPublisher {
 	}
 }
 
+func (t *testPublisher) asyncPublishEvent(event common.MapStr) bool {
+	ctx := context{}
+	return t.pub.asyncPublisher.client().PublishEvent(&ctx, event)
+}
+
+func (t *testPublisher) asyncPublishEvents(events []common.MapStr) bool {
+	ctx := context{}
+	return t.pub.asyncPublisher.client().PublishEvents(&ctx, events)
+}
+
+func (t *testPublisher) syncPublishEvent(event common.MapStr) bool {
+	ctx := context{publishOptions: publishOptions{confirm: true}}
+	return t.pub.syncPublisher.client().PublishEvent(&ctx, event)
+}
+
+func (t *testPublisher) syncPublishEvents(events []common.MapStr) bool {
+	ctx := context{publishOptions: publishOptions{confirm: true}}
+	return t.pub.syncPublisher.client().PublishEvents(&ctx, events)
+}
+
 // newTestPublisherWithBulk returns a new testPublisher with bulk message
 // dispatching enabled.
 func newTestPublisherWithBulk(response OutputResponse) *testPublisher {
@@ -166,4 +187,12 @@ func newTestPublisherWithBulk(response OutputResponse) *testPublisher {
 // dispatching disabled.
 func newTestPublisherNoBulk(response OutputResponse) *testPublisher {
 	return newTestPublisher(-1, response)
+}
+
+func testMessage(s *testSignaler, event common.MapStr) message {
+	return message{context: context{signal: s}, event: event}
+}
+
+func testBulkMessage(s *testSignaler, events []common.MapStr) message {
+	return message{context: context{signal: s}, events: events}
 }

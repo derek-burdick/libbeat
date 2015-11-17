@@ -23,7 +23,6 @@ func createElasticsearchConnection(flushInterval int, bulkSize int) elasticsearc
 
 	var output elasticsearchOutput
 	output.init("packetbeat", outputs.MothershipConfig{
-		Enabled:        true,
 		Save_topology:  true,
 		Host:           GetEsHost(),
 		Port:           esPort,
@@ -33,7 +32,7 @@ func createElasticsearchConnection(flushInterval int, bulkSize int) elasticsearc
 		Index:          index,
 		Protocol:       "http",
 		Flush_interval: &flushInterval,
-		Bulk_size:      &bulkSize,
+		BulkMaxSize:    &bulkSize,
 	}, 10)
 
 	return output
@@ -94,7 +93,7 @@ func TestOneEvent(t *testing.T) {
 	output := createElasticsearchConnection(0, 0)
 
 	event := common.MapStr{}
-	event["timestamp"] = common.Time(time.Now())
+	event["@timestamp"] = common.Time(time.Now())
 	event["type"] = "redis"
 	event["status"] = "OK"
 	event["responsetime"] = 34
@@ -127,13 +126,13 @@ func TestOneEvent(t *testing.T) {
 	// before the refresh. We should find a better solution for this.
 	time.Sleep(200 * time.Millisecond)
 
-	_, err = client.Refresh(index)
+	_, _, err = client.Refresh(index)
 	if err != nil {
 		t.Errorf("Failed to refresh: %s", err)
 	}
 
 	defer func() {
-		_, err = client.Delete(index, "", "", nil)
+		_, _, err = client.Delete(index, "", "", nil)
 		if err != nil {
 			t.Errorf("Failed to delete index: %s", err)
 		}
@@ -142,7 +141,7 @@ func TestOneEvent(t *testing.T) {
 	params := map[string]string{
 		"q": "shipper:appserver1",
 	}
-	resp, err := client.SearchURI(index, "", params)
+	_, resp, err := client.SearchURI(index, "", params)
 
 	if err != nil {
 		t.Errorf("Failed to query elasticsearch for index(%s): %s", index, err)
@@ -168,7 +167,7 @@ func TestEvents(t *testing.T) {
 	output := createElasticsearchConnection(0, 0)
 
 	event := common.MapStr{}
-	event["timestamp"] = common.Time(time.Now())
+	event["@timestamp"] = common.Time(time.Now())
 	event["type"] = "redis"
 	event["status"] = "OK"
 	event["responsetime"] = 34
@@ -216,13 +215,13 @@ func TestEvents(t *testing.T) {
 	}
 
 	defer func() {
-		_, err = output.randomClient().Delete(index, "", "", nil)
+		_, _, err = output.randomClient().Delete(index, "", "", nil)
 		if err != nil {
 			t.Errorf("Failed to delete index: %s", err)
 		}
 	}()
 
-	resp, err := output.randomClient().SearchURI(index, "", params)
+	_, resp, err := output.randomClient().SearchURI(index, "", params)
 
 	if err != nil {
 		t.Errorf("Failed to query elasticsearch: %s", err)
@@ -246,7 +245,7 @@ func testBulkWithParams(t *testing.T, output elasticsearchOutput) {
 	for i := 0; i < 10; i++ {
 
 		event := common.MapStr{}
-		event["timestamp"] = common.Time(time.Now())
+		event["@timestamp"] = common.Time(time.Now())
 		event["type"] = "redis"
 		event["status"] = "OK"
 		event["responsetime"] = 34
@@ -278,13 +277,13 @@ func testBulkWithParams(t *testing.T, output elasticsearchOutput) {
 	}
 
 	defer func() {
-		_, err := output.randomClient().Delete(index, "", "", nil)
+		_, _, err := output.randomClient().Delete(index, "", "", nil)
 		if err != nil {
 			t.Errorf("Failed to delete index: %s", err)
 		}
 	}()
 
-	resp, err := output.randomClient().SearchURI(index, "", params)
+	_, resp, err := output.randomClient().SearchURI(index, "", params)
 
 	if err != nil {
 		t.Errorf("Failed to query elasticsearch: %s", err)

@@ -1,6 +1,7 @@
 package publisher
 
 import (
+	"sync/atomic"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -16,12 +17,12 @@ func TestMessageWorkerSend(t *testing.T) {
 
 	// Send an event.
 	s1 := newTestSignaler()
-	m1 := message{signal: s1}
+	m1 := message{context: context{signal: s1}}
 	mw.send(m1)
 
 	// Send another event.
 	s2 := newTestSignaler()
-	m2 := message{signal: s2}
+	m2 := message{context: context{signal: s2}}
 	mw.send(m2)
 
 	// Verify that the messageWorker pushed to two messages to the
@@ -40,16 +41,16 @@ func TestMessageWorkerSend(t *testing.T) {
 	// Verify that stopping workerSignal causes a onStop notification
 	// in the messageHandler.
 	ws.stop()
-	assert.True(t, mh.stopped)
+	assert.True(t, atomic.LoadUint32(&mh.stopped) == 1)
 }
 
 // Test that stopQueue invokes the Failed callback on all events in the queue.
 func TestMessageWorkerStopQueue(t *testing.T) {
 	s1 := newTestSignaler()
-	m1 := message{signal: s1}
+	m1 := message{context: context{signal: s1}}
 
 	s2 := newTestSignaler()
-	m2 := message{signal: s2}
+	m2 := message{context: context{signal: s2}}
 
 	qu := make(chan message, 2)
 	qu <- m1

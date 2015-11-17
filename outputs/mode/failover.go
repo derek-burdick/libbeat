@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/elastic/libbeat/common"
+	"github.com/elastic/libbeat/logp"
 	"github.com/elastic/libbeat/outputs"
 )
 
@@ -104,44 +105,26 @@ func (f *FailOverConnectionMode) connect(active int) error {
 // unavailable. On failure PublishEvents tries to connect to another configured
 // connection by random.
 func (f *FailOverConnectionMode) PublishEvents(
-	trans outputs.Signaler,
+	signaler outputs.Signaler,
 	events []common.MapStr,
 ) error {
-	published := 0
-	fails := 0
-	for !f.closed && (f.maxAttempts == 0 || fails < f.maxAttempts) {
-		if err := f.connect(f.active); err != nil {
-			fails++
-			time.Sleep(f.waitRetry)
-			continue
-		}
-
+	return f.publish(signaler, func() (bool, bool) {
 		// loop until all events have been send in case client supports partial sends
-		for published < len(events) {
-			conn := f.conns[f.active]
-			n, err := conn.PublishEvents(events[published:])
+		for len(events) > 0 {
+			var err error
+
+			total := len(events)
+			events, err = f.conns[f.active].PublishEvents(events)
 			if err != nil {
-				break
+				logp.Info("Error publishing events (retrying): %s", err)
+
+				madeProgress := len(events) < total
+				return false, madeProgress
 			}
-			published += n
 		}
 
-		if published == len(events) {
-			outputs.SignalCompleted(trans)
-			return nil
-		}
-
-		// TODO(sissel): Track how frequently we timeout and reconnect. If we're
-		// timing out too frequently, there's really no point in timing out since
-		// basically everything is slow or down. We'll want to ratchet up the
-		// timeout value slowly until things improve, then ratchet it down once
-		// things seem healthy.
-		time.Sleep(f.waitRetry)
-		fails++
-	}
-
-	outputs.SignalFailed(trans)
-	return nil
+		return true, false
+	})
 }
 
 // PublishEvent forwards a single event. On failure PublishEvent tries to reconnect.
@@ -149,23 +132,63 @@ func (f *FailOverConnectionMode) PublishEvent(
 	signaler outputs.Signaler,
 	event common.MapStr,
 ) error {
+	return f.publish(signaler, func() (bool, bool) {
+		if err := f.conns[f.active].PublishEvent(event); err != nil {
+			logp.Info("Error publishing events (retrying): %s", err)
+			return false, false
+		}
+		return true, false
+	})
+}
+
+// publish is used to publish events using the configured protocol client.
+// It provides general error handling and back off support used on failed
+// send attempts. To be used by PublishEvent and PublishEvents.
+// The send callback will try to progress sending traffic and returns kind of
+// progress made in ok or resetFail. If ok is set to true, send finished
+// processing events. If ok is false but resetFail is set, send was partially
+// successful. If send was partially successful, the fail counter is reset thus up
+// to maxAttempts send attempts without any progress might be executed.
+func (f *FailOverConnectionMode) publish(
+	signaler outputs.Signaler,
+	send func() (ok bool, resetFail bool),
+) error {
 	fails := 0
+	var err error
+
+	// TODO: we want back off support here? Fail over normally will try another
+	// connection.
+
 	for !f.closed && (f.maxAttempts == 0 || fails < f.maxAttempts) {
-		if err := f.connect(f.active); err != nil {
-			fails++
-			time.Sleep(f.waitRetry)
-			continue
+		ok := false
+		resetFail := false
+
+		if err = f.connect(f.active); err != nil {
+			logp.Info("Connecting error publishing events (retrying): %s", err)
+			goto sendFail
 		}
 
-		if err := f.conns[f.active].PublishEvent(event); err != nil {
-			fails++
-			continue
+		ok, resetFail = send()
+		if !ok {
+			goto sendFail
 		}
 
 		outputs.SignalCompleted(signaler)
 		return nil
+
+	sendFail:
+		fails++
+		if resetFail {
+			fails = 0
+		}
+		if f.maxAttempts > 0 && fails == f.maxAttempts {
+			// max number of attempts reached
+			break
+		}
+
+		time.Sleep(f.waitRetry)
 	}
 
-	outputs.SignalFailed(signaler)
+	outputs.SignalFailed(signaler, err)
 	return nil
 }

@@ -34,7 +34,7 @@ func (p *preprocessor) onMessage(m message) {
 
 	var ignore []int // indices of events to be removed from events
 
-	debug("preprocessor")
+	debug("Start Preprocessing")
 
 	for i, event := range events {
 		// validate some required field
@@ -52,8 +52,11 @@ func (p *preprocessor) onMessage(m message) {
 			continue
 		}
 
-		// add additional meta data
-		event["shipper"] = publisher.name
+		// add additional Beat meta data
+		event["beat"] = common.MapStr{
+			"name":     publisher.name,
+			"hostname": publisher.hostname,
+		}
 		if len(publisher.tags) > 0 {
 			event["tags"] = publisher.tags
 		}
@@ -66,7 +69,7 @@ func (p *preprocessor) onMessage(m message) {
 	// return if no event is left
 	if len(ignore) == len(events) {
 		debug("no event left, complete send")
-		outputs.SignalCompleted(m.signal)
+		outputs.SignalCompleted(m.context.signal)
 		return
 	}
 
@@ -84,29 +87,29 @@ func (p *preprocessor) onMessage(m message) {
 
 	if publisher.disabled {
 		debug("publisher disabled")
-		outputs.SignalCompleted(m.signal)
+		outputs.SignalCompleted(m.context.signal)
 		return
 	}
 
-	debug("preprocessor forward")
+	debug("Forward preprocessed events")
 	if single {
-		p.handler.onMessage(message{signal: m.signal, event: events[0]})
+		p.handler.onMessage(message{context: m.context, event: events[0]})
 	} else {
-		p.handler.onMessage(message{signal: m.signal, events: events})
+		p.handler.onMessage(message{context: m.context, events: events})
 	}
 }
 
 // filterEvent validates an event for common required fields with types.
 // If event is to be filtered out the reason is returned as error.
 func filterEvent(event common.MapStr) error {
-	ts, ok := event["timestamp"]
+	ts, ok := event["@timestamp"]
 	if !ok {
-		return errors.New("Missing 'timestamp' field from event")
+		return errors.New("Missing '@timestamp' field from event")
 	}
 
 	_, ok = ts.(common.Time)
 	if !ok {
-		return errors.New("Invalid 'timestamp' field from event.")
+		return errors.New("Invalid '@timestamp' field from event.")
 	}
 
 	err := event.EnsureCountField()
@@ -149,11 +152,11 @@ func updateEventAddresses(publisher *PublisherType, event common.MapStr) bool {
 
 		//get the direction of the transaction: outgoing (as client)/incoming (as server)
 		if publisher.IsPublisherIP(dst.Ip) {
-			// outgoing transaction
-			event["direction"] = "out"
-		} else {
-			//incoming transaction
+			// incoming transaction
 			event["direction"] = "in"
+		} else {
+			//outgoing transaction
+			event["direction"] = "out"
 		}
 	}
 

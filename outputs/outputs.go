@@ -8,7 +8,6 @@ import (
 )
 
 type MothershipConfig struct {
-	Enabled            bool
 	Save_topology      bool
 	Host               string
 	Port               int
@@ -28,10 +27,11 @@ type MothershipConfig struct {
 	Number_of_files    int
 	DataType           string
 	Flush_interval     *int
-	Bulk_size          *int
+	BulkMaxSize        *int `yaml:"bulk_max_size"`
 	Max_retries        *int
 	Pretty             *bool
 	TLS                *TLSConfig
+	Worker             int
 	AwsSign            bool
 }
 
@@ -97,7 +97,7 @@ func InitOutputs(
 	var plugins []OutputPlugin = nil
 	for name, plugin := range enabledOutputPlugins {
 		config, exists := configs[name]
-		if !exists || !config.Enabled {
+		if !exists {
 			continue
 		}
 
@@ -109,6 +109,7 @@ func InitOutputs(
 
 		plugin := OutputPlugin{Name: name, Config: config, Output: output}
 		plugins = append(plugins, plugin)
+		logp.Info("Activated %s as output plugin.", name)
 	}
 	return plugins, nil
 }

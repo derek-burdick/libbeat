@@ -20,6 +20,8 @@ const (
 
 	elasticsearchDefaultHost = "localhost"
 	elasticsearchDefaultPort = "9200"
+
+	integrationTestWindowSize = 32
 )
 
 type esConnection struct {
@@ -33,11 +35,17 @@ type testOutputer struct {
 	*esConnection
 }
 
+type esSoure interface {
+	RefreshIndex()
+}
+
 type esValueReader interface {
+	esSoure
 	Read() ([]map[string]interface{}, error)
 }
 
 type esCountReader interface {
+	esSoure
 	Count() (int, error)
 }
 
@@ -74,7 +82,7 @@ func getElasticsearchHost() string {
 }
 
 func esConnect(t *testing.T, index string) *esConnection {
-	ts := time.Now()
+	ts := time.Now().UTC()
 
 	host := getElasticsearchHost()
 	index = fmt.Sprintf("%s-%02d.%02d.%02d",
@@ -83,9 +91,9 @@ func esConnect(t *testing.T, index string) *esConnection {
 	client := elasticsearch.NewClient(host, "", nil, "", "")
 
 	// try to drop old index if left over from failed test
-	_, _ = client.Delete(index, "", "", nil) // ignore error
+	_, _, _ = client.Delete(index, "", "", nil) // ignore error
 
-	_, err := client.CreateIndex(index, common.MapStr{
+	_, _, err := client.CreateIndex(index, common.MapStr{
 		"settings": common.MapStr{
 			"number_of_shards":   1,
 			"number_of_replicas": 0,
@@ -107,11 +115,13 @@ func testElasticsearchIndex(test string) string {
 }
 
 func newTestLogstashOutput(t *testing.T, test string, tls bool) *testOutputer {
+	windowSize := integrationTestWindowSize
+
 	config := &outputs.MothershipConfig{
-		Enabled: true,
-		Hosts:   []string{getLogstashHost()},
-		TLS:     nil,
-		Index:   testLogstashIndex(test),
+		Hosts:       []string{getLogstashHost()},
+		TLS:         nil,
+		Index:       testLogstashIndex(test),
+		BulkMaxSize: &windowSize,
 	}
 	if tls {
 		config.Hosts = []string{getLogstashTLSHost()}
@@ -145,11 +155,10 @@ func newTestElasticsearchOutput(t *testing.T, test string) *testOutputer {
 	flushInterval := 0
 	bulkSize := 0
 	config := outputs.MothershipConfig{
-		Enabled:        true,
 		Hosts:          []string{getElasticsearchHost()},
 		Index:          index,
 		Flush_interval: &flushInterval,
-		Bulk_size:      &bulkSize,
+		BulkMaxSize:    &bulkSize,
 	}
 
 	output, err := plugin.NewOutput("test", &config, 10)
@@ -164,20 +173,20 @@ func newTestElasticsearchOutput(t *testing.T, test string) *testOutputer {
 }
 
 func (es *esConnection) Cleanup() {
-	_, err := es.Delete(es.index, "", "", nil)
+	_, _, err := es.Delete(es.index, "", "", nil)
 	if err != nil {
 		es.t.Errorf("Failed to delete index: %s", err)
 	}
 }
 
 func (es *esConnection) Read() ([]map[string]interface{}, error) {
-	_, err := es.Refresh(es.index)
+	_, _, err := es.Refresh(es.index)
 	if err != nil {
 		es.t.Errorf("Failed to refresh: %s", err)
 	}
 
 	params := map[string]string{}
-	resp, err := es.SearchURI(es.index, "", params)
+	_, resp, err := es.SearchURI(es.index, "", params)
 	if err != nil {
 		es.t.Errorf("Failed to query elasticsearch for index(%s): %s", es.index, err)
 		return nil, err
@@ -191,14 +200,18 @@ func (es *esConnection) Read() ([]map[string]interface{}, error) {
 	return hits, err
 }
 
+func (es *esConnection) RefreshIndex() {
+	es.Refresh(es.index)
+}
+
 func (es *esConnection) Count() (int, error) {
-	_, err := es.Refresh(es.index)
+	_, _, err := es.Refresh(es.index)
 	if err != nil {
 		es.t.Errorf("Failed to refresh: %s", err)
 	}
 
 	params := map[string]string{}
-	resp, err := es.CountSearchURI(es.index, "", params)
+	_, resp, err := es.CountSearchURI(es.index, "", params)
 	if err != nil {
 		es.t.Errorf("Failed to query elasticsearch for index(%s): %s", es.index, err)
 		return 0, err
@@ -220,6 +233,7 @@ func waitUntilTrue(duration time.Duration, fn func() bool) bool {
 
 func checkIndex(reader esCountReader, minValues int) func() bool {
 	return func() bool {
+		reader.RefreshIndex()
 		resp, err := reader.Count()
 		return err != nil || resp >= minValues
 	}
@@ -253,10 +267,10 @@ func testSendMessageViaLogstash(t *testing.T, name string, tls bool) {
 	defer ls.Cleanup()
 
 	event := common.MapStr{
-		"timestamp": common.Time(time.Now()),
-		"host":      "test-host",
-		"type":      "log",
-		"message":   "hello world",
+		"@timestamp": common.Time(time.Now()),
+		"host":       "test-host",
+		"type":       "log",
+		"message":    "hello world",
 	}
 	ls.PublishEvent(nil, time.Now(), event)
 
@@ -290,10 +304,10 @@ func testSendMultipleViaLogstash(t *testing.T, name string, tls bool) {
 	defer ls.Cleanup()
 	for i := 0; i < 10; i++ {
 		event := common.MapStr{
-			"timestamp": common.Time(time.Now()),
-			"host":      "test-host",
-			"type":      "log",
-			"message":   fmt.Sprintf("hello world - %v", i),
+			"@timestamp": common.Time(time.Now()),
+			"host":       "test-host",
+			"type":       "log",
+			"message":    fmt.Sprintf("hello world - %v", i),
 		}
 		ls.PublishEvent(nil, time.Now(), event)
 	}
@@ -320,6 +334,28 @@ func TestSendMultipleBigBatchesViaLogstashTLS(t *testing.T) {
 }
 
 func testSendMultipleBigBatchesViaLogstash(t *testing.T, name string, tls bool) {
+	testSendMultipleBatchesViaLogstash(t, name, 15, 4*integrationTestWindowSize, tls)
+}
+
+func TestSendMultipleSmallBatchesViaLogstashTCP(t *testing.T) {
+	testSendMultipleSmallBatchesViaLogstash(t, "multiple-small-tcp", false)
+}
+
+func TestSendMultipleSmallBatchesViaLogstashTLS(t *testing.T) {
+	testSendMultipleSmallBatchesViaLogstash(t, "multiple-small-tls", true)
+}
+
+func testSendMultipleSmallBatchesViaLogstash(t *testing.T, name string, tls bool) {
+	testSendMultipleBatchesViaLogstash(t, name, 15, integrationTestWindowSize/2, tls)
+}
+
+func testSendMultipleBatchesViaLogstash(
+	t *testing.T,
+	name string,
+	numBatches int,
+	batchSize int,
+	tls bool,
+) {
 	if testing.Short() {
 		t.Skip("Skipping in short mode. Requires Logstash and Elasticsearch")
 	}
@@ -327,17 +363,15 @@ func testSendMultipleBigBatchesViaLogstash(t *testing.T, name string, tls bool) 
 	ls := newTestLogstashOutput(t, name, tls)
 	defer ls.Cleanup()
 
-	numBatches := 15
-	batchSize := 256
 	batches := make([][]common.MapStr, 0, numBatches)
 	for i := 0; i < numBatches; i++ {
 		batch := make([]common.MapStr, 0, batchSize)
 		for j := 0; j < batchSize; j++ {
 			event := common.MapStr{
-				"timestamp": common.Time(time.Now()),
-				"host":      "test-host",
-				"type":      "log",
-				"message":   fmt.Sprintf("batch hello world - %v", i*batchSize+j),
+				"@timestamp": common.Time(time.Now()),
+				"host":       "test-host",
+				"type":       "log",
+				"message":    fmt.Sprintf("batch hello world - %v", i*batchSize+j),
 			}
 			batch = append(batch, event)
 		}
@@ -352,7 +386,8 @@ func testSendMultipleBigBatchesViaLogstash(t *testing.T, name string, tls bool) 
 	}
 
 	// wait for logstash event flush + elasticsearch
-	waitUntilTrue(5*time.Second, checkIndex(ls, numBatches*batchSize))
+	ok := waitUntilTrue(5*time.Second, checkIndex(ls, numBatches*batchSize))
+	assert.True(t, ok) // check number of events matches total number of events
 
 	// search value in logstash elasticsearch index
 	resp, err := ls.Read()
@@ -387,10 +422,10 @@ func testLogstashElasticOutputPluginCompatibleMessage(t *testing.T, name string,
 
 	ts := time.Now()
 	event := common.MapStr{
-		"timestamp": common.Time(ts),
-		"host":      "test-host",
-		"type":      "log",
-		"message":   "hello world",
+		"@timestamp": common.Time(ts),
+		"host":       "test-host",
+		"type":       "log",
+		"message":    "hello world",
 	}
 
 	es.PublishEvent(nil, ts, event)
@@ -442,10 +477,10 @@ func testLogstashElasticOutputPluginBulkCompatibleMessage(t *testing.T, name str
 	ts := time.Now()
 	events := []common.MapStr{
 		common.MapStr{
-			"timestamp": common.Time(ts),
-			"host":      "test-host",
-			"type":      "log",
-			"message":   "hello world",
+			"@timestamp": common.Time(ts),
+			"host":       "test-host",
+			"type":       "log",
+			"message":    "hello world",
 		},
 	}
 	es.BulkPublish(nil, ts, events)
@@ -476,7 +511,7 @@ func testLogstashElasticOutputPluginBulkCompatibleMessage(t *testing.T, name str
 func checkEvent(t *testing.T, ls, es map[string]interface{}) {
 	lsEvent := ls["_source"].(map[string]interface{})
 	esEvent := es["_source"].(map[string]interface{})
-	commonFields := []string{"timestamp", "host", "type", "message"}
+	commonFields := []string{"@timestamp", "host", "type", "message"}
 	for _, field := range commonFields {
 		assert.NotNil(t, lsEvent[field])
 		assert.NotNil(t, esEvent[field])
