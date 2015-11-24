@@ -12,6 +12,18 @@ All notable changes to this project will be documented in this file based on the
 
 ### Deprecated
 
+## [1.0.0](https://github.com/elastic/libbeat/compare/1.0.0-rc2...1.0.0)
+
+### Backward Compatibility Breaks
+
+### Bugfixes
+- Fix random panic on shutdown by calling shutdown handler only once. elastic/filebeat#204
+- Fix credentials are not send when pinging an elasticsearch host. elastic/fileabeat#287
+
+### Added
+
+### Deprecated
+
 ## [1.0.0-rc2](https://github.com/elastic/libbeat/compare/1.0.0-rc1...1.0.0-rc2)
 
 ### Backward Compatibility Breaks
