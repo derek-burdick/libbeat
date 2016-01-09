@@ -88,7 +88,9 @@ func esConnect(t *testing.T, index string) *esConnection {
 	index = fmt.Sprintf("%s-%02d.%02d.%02d",
 		index, ts.Year(), ts.Month(), ts.Day())
 
-	client := elasticsearch.NewClient(host, "", nil, "", "")
+	username := os.Getenv("ES_USER")
+	password := os.Getenv("ES_PASS")
+	client := elasticsearch.NewClient(host, "", nil, nil, username, password)
 
 	// try to drop old index if left over from failed test
 	_, _, _ = client.Delete(index, "", "", nil) // ignore error
@@ -155,10 +157,12 @@ func newTestElasticsearchOutput(t *testing.T, test string) *testOutputer {
 	flushInterval := 0
 	bulkSize := 0
 	config := outputs.MothershipConfig{
-		Hosts:          []string{getElasticsearchHost()},
-		Index:          index,
-		Flush_interval: &flushInterval,
-		BulkMaxSize:    &bulkSize,
+		Hosts:         []string{getElasticsearchHost()},
+		Index:         index,
+		FlushInterval: &flushInterval,
+		BulkMaxSize:   &bulkSize,
+		Username:      os.Getenv("ES_USER"),
+		Password:      os.Getenv("ES_PASS"),
 	}
 
 	output, err := plugin.NewOutput("test", &config, 10)

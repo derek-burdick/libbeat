@@ -8,6 +8,7 @@ import (
 	"io"
 	"io/ioutil"
 	"net/http"
+	"net/url"
 	"time"
 
 	awsauth "github.com/derek-burdick/go-aws-auth"
@@ -32,17 +33,25 @@ type Connection struct {
 }
 
 func NewClient(
-	url, index string, tls *tls.Config,
+	esURL, index string, proxyURL *url.URL, tls *tls.Config,
 	username, password string, awsSign bool,
 ) *Client {
+	proxy := http.ProxyFromEnvironment
+	if proxyURL != nil {
+		proxy = http.ProxyURL(proxyURL)
+	}
+
 	client := &Client{
 		Connection{
-			URL:      url,
+			URL:      esURL,
 			Username: username,
 			Password: password,
 			AwsSign:  awsSign,
 			http: &http.Client{
-				Transport: &http.Transport{TLSClientConfig: tls},
+				Transport: &http.Transport{
+					TLSClientConfig: tls,
+					Proxy:           proxy,
+				},
 			},
 		},
 		index,
